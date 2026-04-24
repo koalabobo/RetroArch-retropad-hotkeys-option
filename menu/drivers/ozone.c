@@ -3892,11 +3892,20 @@ static void ozone_update_savestate_thumbnail_path(void *data, unsigned i)
 {
    settings_t *settings     = config_get_ptr();
    ozone_handle_t *ozone    = (ozone_handle_t*)data;
-   bool savestate_thumbnail = settings->bools.savestate_thumbnail_enable;
-   const char *current_path = strdup(ozone->savestate_thumbnail_file_path);
+   bool savestate_thumbnail;
+   /* Stack-local snapshot of the current path; see materialui (93449d3)
+    * and xmb equivalents for rationale.  Fixes three stacked problems:
+    * null-deref on !data via the strdup-before-guard ordering, leak of
+    * a never-freed heap string assigned to const char *, and needless
+    * heap allocation for a value that lives in a fixed-size
+    * char[PATH_MAX_LENGTH] ivar. */
+   char old_path[PATH_MAX_LENGTH];
 
    if (!ozone)
       return;
+
+   savestate_thumbnail = settings->bools.savestate_thumbnail_enable;
+   strlcpy(old_path, ozone->savestate_thumbnail_file_path, sizeof(old_path));
 
    if (ozone->flags2 & OZONE_FLAG2_SELECTION_CORE_IS_VIEWER_REAL)
       ozone->flags2 |=  OZONE_FLAG2_SELECTION_CORE_IS_VIEWER;
@@ -3950,7 +3959,7 @@ static void ozone_update_savestate_thumbnail_path(void *data, unsigned i)
             strlcpy(ozone->savestate_thumbnail_file_path, path,
                   sizeof(ozone->savestate_thumbnail_file_path));
 
-            if (!string_is_equal(current_path,
+            if (!string_is_equal(old_path,
                 ozone->savestate_thumbnail_file_path))
                gfx_thumbnail_reset(&ozone->thumbnails.savestate);
 
@@ -4614,6 +4623,14 @@ static ozone_node_t *ozone_copy_node(const ozone_node_t *old_node)
 {
    ozone_node_t *new_node = (ozone_node_t*)malloc(sizeof(*new_node));
 
+   /* NULL-check the malloc: '*new_node = *old_node' on the next
+    * line NULL-derefs on OOM.  Caller in ozone_list_deep_copy
+    * handles a NULL return - it just leaves
+    * dst->list[j].userdata = NULL, which matches the 'no
+    * src_udata' branch. */
+   if (!new_node)
+      return NULL;
+
    *new_node              = *old_node;
    new_node->fullpath     = old_node->fullpath
          ? strdup(old_node->fullpath)
@@ -4653,8 +4670,17 @@ static void ozone_list_deep_copy(const file_list_t *src,
       if (src_adata)
       {
          void *data = malloc(sizeof(menu_file_list_cbs_t));
-         memcpy(data, src_adata, sizeof(menu_file_list_cbs_t));
-         dst->list[j].actiondata = data;
+         /* NULL-check the malloc before the memcpy on the next
+          * line NULL-derefs.  On OOM leave actiondata NULL -
+          * matches the 'no src_adata' branch above; file_list
+          * consumers already handle NULL actiondata entries. */
+         if (data)
+         {
+            memcpy(data, src_adata, sizeof(menu_file_list_cbs_t));
+            dst->list[j].actiondata = data;
+         }
+         else
+            dst->list[j].actiondata = NULL;
       }
 
       ++j;
@@ -5209,6 +5235,13 @@ static void ozone_context_reset_horizontal_list(ozone_handle_t *ozone)
       else if (string_ends_with_size(ozone->horizontal_list.list[i].label, ".lvw",
             strlen(ozone->horizontal_list.list[i].label), STRLEN_CONST(".lvw")))
       {
+         /* Free any previously-set console_name before
+          * overwriting; matches the .lpl branch above.
+          * ozone_context_reset_horizontal_list is called on
+          * every theme change / refresh, so without this free
+          * the console_name from the previous reset leaks. */
+         if (node->console_name)
+            free(node->console_name);
          node->console_name = strdup(path + strlen(msg_hash_to_str(MENU_ENUM_LABEL_EXPLORE_VIEW)) + 2);
          node->icon = ozone->icons_textures[OZONE_ENTRIES_ICONS_TEXTURE_CURSOR];
       }

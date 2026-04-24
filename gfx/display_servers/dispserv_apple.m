@@ -83,6 +83,33 @@ static bool apple_display_server_set_window_progress(void *data, int progress, b
 
       // Create a custom view for the dock tile
       [iv addSubview:indicator];
+
+      /* This file is compiled under BOTH build systems:
+       *   - qb/top-level Makefile:  MRC (not in the per-file ARC
+       *     override list at Makefile:275 alongside metal.o /
+       *     mfi_joypad.o / coreaudio3.o).
+       *   - pkg/apple/*.xcodeproj:  ARC, via griffin_objc.m which
+       *     #include's this file into a TU compiled with
+       *     CLANG_ENABLE_OBJC_ARC=YES (pkg/apple/BaseConfig.xcconfig:182).
+       *
+       * Under MRC, 'iv' is a local +1 from alloc+init.  setContentView:
+       * and addSubview: each retain their own reference, so those are
+       * legitimately owned; the +1 from alloc+init is ours to release
+       * before the local goes out of scope, or it leaks for the app's
+       * lifetime.  Under ARC, the compiler inserts the matching release
+       * at block scope exit automatically.
+       *
+       * RARCH_RELEASE handles both: MRC -> [(x) release], ARC -> ((void)0).
+       * Raw '[iv release]' is a compile error under ARC
+       * ('ARC forbids explicit message send of release') which the
+       * Xcode build would have flagged immediately.
+       *
+       * 'indicator' is intentionally kept +1 - it's a file-scope static
+       * initialised inside dispatch_once, and holding that +1 across
+       * the app lifetime is how we keep it referenced for the
+       * subsequent setDoubleValue / setHidden calls outside the
+       * block. */
+      RARCH_RELEASE(iv);
    });
    if (finished)
       [indicator setDoubleValue:(double)-1];
@@ -328,7 +355,19 @@ static void *apple_display_server_get_resolution_list(
    /* Set length and allocate config array for macOS */
    *len = (unsigned)[configArray count];
    if (!(conf = (struct video_display_config*)calloc(*len, sizeof(struct video_display_config))))
+   {
+      /* displayModes and currentMode are CFRetain'd +1 by their
+       * respective CGDisplayCopy* calls above (~line 250 / 266)
+       * and must be CFRelease'd on every exit path.  The success
+       * return below does this at lines 339-340; the pre-patch
+       * OOM path bypassed both and leaked them until the process
+       * died.  Each is a small CF object (handful of bytes) but
+       * a leak of system-owned Core Graphics state is still
+       * worth plugging. */
+      CFRelease(displayModes);
+      CFRelease(currentMode);
       return NULL;
+   }
 
    for (j = 0; j < *len; j++)
    {

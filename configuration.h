@@ -669,6 +669,7 @@ typedef struct settings
       bool video_windowed_fullscreen;
       bool video_vsync;
       bool video_adaptive_vsync;
+      bool video_scanline_sync;
       bool video_hard_sync;
       bool video_waitable_swapchains;
       bool video_vfilter;
@@ -1395,6 +1396,10 @@ bool config_replace(bool config_save_on_exit, char *path);
 #endif
 
 bool config_overlay_enable_default(void);
+
+#if defined(__APPLE__) && defined(HAVE_VULKAN)
+bool config_metal_arg_buffers_default(void);
+#endif
 
 void config_set_defaults(void *data);
 

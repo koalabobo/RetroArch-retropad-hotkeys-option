@@ -70,9 +70,10 @@
 #include <libretro.h>
 #include <libretro_d3d12.h>
 #include "../common/d3dcompiler_common.h"
-#ifdef HAVE_SLANG
+/* slang_process.h is self-contained - it only defines types and
+ * constants used by pass state.  The actual slang_process() call
+ * sites remain guarded with HAVE_SLANG+HAVE_SPIRV_CROSS. */
 #include "../drivers_shader/slang_process.h"
-#endif
 #ifdef HAVE_THREADS
 #include "../video_thread_wrapper.h"
 #endif
@@ -3721,6 +3722,7 @@ static bool d3d12_init_swapchain(d3d12_video_t* d3d12,
    }
 
    if (     (d3d12->flags & D3D12_ST_FLAG_WAITABLE_SWAPCHAINS)
+         && (d3d12->flags & D3D12_ST_FLAG_VSYNC)
          && (d3d12->chain.frameLatencyWaitableObject = DXGIGetFrameLatencyWaitableObject(d3d12->chain.handle)))
    {
       settings_t* settings      = config_get_ptr();
@@ -6019,7 +6021,7 @@ static void d3d12_gfx_set_nonblock_state(void* data,
    if (!d3d12)
       return;
 
-   if (toggle)
+   if (toggle || !swap_interval)
       d3d12->flags           &= ~D3D12_ST_FLAG_VSYNC;
    else
       d3d12->flags           |=  D3D12_ST_FLAG_VSYNC;
